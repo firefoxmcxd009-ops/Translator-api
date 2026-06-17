@@ -2,17 +2,44 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 
-// មុខងារវៃឆ្លាត៖ ទាញយកកូដភាសា (Language Code) ចេញពី Voice ID ដោយស្វ័យប្រវត្ត
-function getLangFromVoice(voiceID) {
-    if (!voiceID) return 'km-KH';
-    const parts = voiceID.split('-');
-    if (parts.length >= 2) {
-        return `${parts[0]}-${parts[1]}`; // ឧទាហរណ៍៖ km-KH ឬ en-US
+// មុខងារវៃឆ្លាត៖ ផ្គូផ្គង Voice ID ពី HTML ចាស់ ទៅកាន់សំឡេង AI ពិតរបស់ Microsoft
+function mapVoiceAndLang(incomingVoiceID) {
+    let voiceID = 'km-KH-SreymomNeural'; // លំនាំដើម សំឡេងស្រីមុំ
+    let lang = 'km-KH';
+
+    if (incomingVoiceID) {
+        const v = incomingVoiceID.toLowerCase();
+        if (v.includes('piseth')) {
+            voiceID = 'km-KH-PisethNeural';
+            lang = 'km-KH';
+        } else if (v.includes('km') || v.includes('khmer')) {
+            voiceID = 'km-KH-SreymomNeural';
+            lang = 'km-KH';
+        } else if (v.includes('en')) {
+            voiceID = 'en-US-AvaNeural'; // សំឡេងអង់គ្លេស AI ពិរោះ
+            lang = 'en-US';
+        } else {
+            // បើផ្ញើមកត្រូវទម្រង់ស្រាប់
+            voiceID = incomingVoiceID;
+            const parts = incomingVoiceID.split('-');
+            if (parts.length >= 2) lang = `${parts[0]}-${parts[1]}`;
+        }
     }
-    return 'km-KH';
+    return { voiceID, lang };
 }
 
-function getEdgeAudio(text, voiceID = 'km-KH-SreymomNeural') {
+// មុខងារបំប្លែងល្បឿនសំឡេងពី HTML
+function mapSpeed(voiceSpeed) {
+    if (!voiceSpeed) return '+0%';
+    const speed = parseInt(voiceSpeed);
+    if (speed === 1) return '+20%';
+    if (speed === 2) return '+40%';
+    if (speed === -1) return '-20%';
+    if (speed === -2) return '-40%';
+    return '+0%';
+}
+
+function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
     return new Promise((resolve, reject) => {
         const requestId = crypto.randomUUID().replace(/-/g, '');
         const url = `https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/trusted/v1/aria/stream?Ocp-Apim-Subscription-Key=6A5AA1D4EAFF4E9B87E7EFD3C454C3EF&X-ConnectionId=${requestId}`;
@@ -31,17 +58,20 @@ function getEdgeAudio(text, voiceID = 'km-KH-SreymomNeural') {
                 if (res.statusCode === 200) {
                     resolve(Buffer.concat(chunks));
                 } else {
-                    reject(new Error('ស្ថានភាពកំហុសពី Server: ' + res.statusCode));
+                    reject(new Error('Microsoft Server Error: ' + res.statusCode));
                 }
             });
         });
 
         req.on('error', (err) => reject(err));
 
-        // កំណត់ភាសាឱ្យរត់ឌីណាមិកតាម Voice ID ការពារកុំឱ្យលោត Error 400
-        const lang = getLangFromVoice(voiceID);
+        // ចាប់ផ្តើមបំប្លែងទិន្នន័យឱ្យត្រូវស្តង់ដារ Microsoft 
+        const { voiceID, lang } = mapVoiceAndLang(incomingVoiceID);
+        const rate = mapSpeed(incomingSpeed);
         
-        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${lang}'><voice name='${voiceID}'><pitch value='+0Hz'><rate value='+0%'/>${text}</voice></speak>`;
+        // កែសម្រួលទម្រង់ SSML ឱ្យត្រឹមត្រូវតាមបច្ចេកទេស (លែងលោត 400 ទៀតហើយ)
+        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${lang}'><voice name='${voiceID}'><prosody rate='${rate}'>${text}</prosody></voice></speak>`;
+        
         req.write(ssml);
         req.end();
     });
@@ -69,7 +99,8 @@ const server = http.createServer(async (req, res) => {
                     return res.end(JSON.stringify({ error: 'សូមបញ្ចូលអត្ថបទ' }));
                 }
 
-                const audioBuffer = await getEdgeAudio(data.text, data.voiceID);
+                // ផ្ញើទាំង text, voiceID, និង voiceSpeed ទៅដំណើរការ
+                const audioBuffer = await getEdgeAudio(data.text, data.voiceID, data.voiceSpeed);
                 
                 res.writeHead(200, {
                     'Content-Type': 'audio/mpeg',
