@@ -1,13 +1,12 @@
 {
   "name": "khmer-ai-tts-api",
   "version": "1.0.0",
-  "description": "Free Khmer AI Text to Speech API for Render",
+  "description": "Stable Khmer AI Text to Speech API via WebSocket",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "dependencies": {}
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
 }
