@@ -2,9 +2,9 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocket = require('ws');
 
-// មុខងារផ្គូផ្គង Voice ID ពី HTML ចាស់ ទៅកាន់សំឡេង AI ពិតរបស់ Microsoft
+// មុខងារវៃឆ្លាត៖ ផ្គូផ្គងទិន្នន័យចាស់ពី HTML ទៅកាន់សំឡេងពិតរបស់ Microsoft
 function mapVoiceAndLang(incomingVoiceID) {
-    let voiceID = 'km-KH-SreymomNeural'; // លំនាំដើម សំឡេងស្រីមុំ
+    let voiceID = 'km-KH-SreymomNeural'; // លំនាំដើម
     let lang = 'km-KH';
 
     if (incomingVoiceID) {
@@ -27,7 +27,7 @@ function mapVoiceAndLang(incomingVoiceID) {
     return { voiceID, lang };
 }
 
-// មុខងារបំប្លែងល្បឿនសំឡេងពី HTML
+// មុខងារបំប្លែងល្បឿនសំឡេង
 function mapSpeed(voiceSpeed) {
     if (!voiceSpeed) return '+0%';
     const speed = parseInt(voiceSpeed);
@@ -38,41 +38,53 @@ function mapSpeed(voiceSpeed) {
     return '+0%';
 }
 
-// មុខងារស្នូល៖ ទាញយកសំឡេងតាមរយៈ WebSocket (វិធីសាស្ត្រផ្លូវការ)
 function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
     return new Promise((resolve, reject) => {
         const { voiceID, lang } = mapVoiceAndLang(incomingVoiceID);
         const rate = mapSpeed(incomingSpeed);
         const requestId = crypto.randomUUID().replace(/-/g, '');
         
-        // បើកការតភ្ជាប់ WebSocket ទៅកាន់ Microsoft Server
-        const ws = new WebSocket(`wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/trusted/v1/aria/stream?TrustedClientToken=6A5AA1D4EAFF4E9B87E7EFD3C454C3EF&X-ConnectionId=${requestId}`);
+        // 🔥 ចំណុចកែប្រែសំខាន់បំផុត៖ បន្ថែម options { headers } បន្លំខ្លួនជា Microsoft Edge Browser ការពារ Error 400
+        const ws = new WebSocket(
+            `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/trusted/v1/aria/stream?TrustedClientToken=6A5AA1D4EAFF4E9B87E7EFD3C454C3EF&ConnectionId=${requestId}`,
+            {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+                    'Pragma': 'no-cache',
+                    'Cache-Control': 'no-cache',
+                    'Origin': 'chrome-extension://jdiccjclgidgnoocibehandapbafbgne'
+                }
+            }
+        );
         
         let audioBuffers = [];
         let timeout = setTimeout(() => {
             ws.terminate();
-            reject(new Error("អស់រយៈពេលរង់ចាំ (Timeout)"));
+            reject(new Error("អស់រយៈពេលរង់ចាំពី Microsoft Server (Timeout)"));
         }, 20000);
 
         ws.on('open', () => {
-            // ១. ផ្ញើការកំណត់ទម្រង់ហ្វាយអូឌីយ៉ូ (Audio Format)
-            const configMsg = `Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbps-mono-mp3"}}}}`;
+            const now = new Date().toString();
+            // ផ្ញើការកំណត់ទម្រង់សំឡេង
+            const configMsg = `X-Timestamp:${now}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbps-mono-mp3"}}}}`;
             ws.send(configMsg);
 
-            // ២. ផ្ញើអត្ថបទ និងទម្រង់ SSML ទៅបំប្លែង
+            // ផ្ញើអត្ថបទ SSML
             const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${lang}'><voice name='${voiceID}'><prosody rate='${rate}'>${text}</prosody></voice></speak>`;
-            const ssmlMsg = `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`;
+            const ssmlMsg = `X-RequestId:${requestId}\r\nX-Timestamp:${now}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`;
             ws.send(ssmlMsg);
         });
 
         ws.on('message', (data, isBinary) => {
             if (isBinary) {
-                // ប្រសិនបើជាទិន្នន័យសំឡេង (Binary) ត្រូវកាត់ក្បាល Header ចេញដើម្បីយកសាច់ MP3 សុទ្ធ
-                const headerLength = data.readUInt16BE(0);
-                const audioChunk = data.slice(2 + headerLength);
-                audioBuffers.push(audioChunk);
+                try {
+                    const headerLength = data.readUInt16BE(0);
+                    const audioChunk = data.slice(2 + headerLength);
+                    audioBuffers.push(audioChunk);
+                } catch (e) {
+                    // បង្ការកំហុសតូចតាចពេលអានទិន្នន័យ Binary
+                }
             } else {
-                // ប្រសិនបើឃើញពាក្យ turn.end មានន័យថា Microsoft បញ្ចប់ការនិយាយហើយ
                 if (data.toString().includes("Path:turn.end")) {
                     clearTimeout(timeout);
                     ws.close();
@@ -92,8 +104,8 @@ function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
     });
 }
 
-// បង្កើត HTTP Server សម្រាប់ឱ្យ HTML ហៅមកប្រើ
 const server = http.createServer(async (req, res) => {
+    // បើក CORS ឱ្យទំព័រ HTML របស់អ្នកអាចទាក់ទងមកបានទោះនៅទីណាក៏ដោយ
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -115,7 +127,6 @@ const server = http.createServer(async (req, res) => {
                     return res.end(JSON.stringify({ error: 'សូមបញ្ចូលអត្ថបទ' }));
                 }
 
-                // ដំណើរការបង្កើតសំឡេងតាម WebSocket
                 const audioBuffer = await getEdgeAudio(data.text, data.voiceID, data.voiceSpeed);
                 
                 res.writeHead(200, {
@@ -132,7 +143,7 @@ const server = http.createServer(async (req, res) => {
         });
     } else {
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-        res.end('ប្រព័ន្ធ WebSocket TTS ដំណើរការជាធម្មតា!');
+        res.end('ប្រព័ន្ធ API ដំណើរការជាធម្មតា!');
     }
 });
 
