@@ -2,7 +2,16 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 
-// មុខងារសម្រាប់ទាញយកសំឡេងពី Microsoft Edge TTS Core
+// មុខងារវៃឆ្លាត៖ ទាញយកកូដភាសា (Language Code) ចេញពី Voice ID ដោយស្វ័យប្រវត្ត
+function getLangFromVoice(voiceID) {
+    if (!voiceID) return 'km-KH';
+    const parts = voiceID.split('-');
+    if (parts.length >= 2) {
+        return `${parts[0]}-${parts[1]}`; // ឧទាហរណ៍៖ km-KH ឬ en-US
+    }
+    return 'km-KH';
+}
+
 function getEdgeAudio(text, voiceID = 'km-KH-SreymomNeural') {
     return new Promise((resolve, reject) => {
         const requestId = crypto.randomUUID().replace(/-/g, '');
@@ -29,15 +38,16 @@ function getEdgeAudio(text, voiceID = 'km-KH-SreymomNeural') {
 
         req.on('error', (err) => reject(err));
 
-        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='km-KH'><voice name='${voiceID}'><pitch value='+0Hz'><rate value='+0%'/>${text}</voice></speak>`;
+        // កំណត់ភាសាឱ្យរត់ឌីណាមិកតាម Voice ID ការពារកុំឱ្យលោត Error 400
+        const lang = getLangFromVoice(voiceID);
+        
+        const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${lang}'><voice name='${voiceID}'><pitch value='+0Hz'><rate value='+0%'/>${text}</voice></speak>`;
         req.write(ssml);
         req.end();
     });
 }
 
-// បង្កើត HTTP Server
 const server = http.createServer(async (req, res) => {
-    // បើកសិទ្ធិ CORS ឱ្យគ្រប់ទីកន្លែងអាចហៅមកបាន
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -70,19 +80,16 @@ const server = http.createServer(async (req, res) => {
             } catch (error) {
                 console.error(error);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'មានបញ្ហាក្នុងការបង្កើតសំឡេង' }));
+                res.end(JSON.stringify({ error: error.message }));
             }
         });
     } else {
-        // បន្ថែម Route នេះដើម្បីឱ្យ Render ដឹងថា Server របស់យើងរស់រវើក (Health Check)
         res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end('ប្រព័ន្ធ TTS កំពុងដំណើរការជាធម្មតា!');
     }
 });
 
-// កំណត់ PORT ឌីណាមិកសម្រាប់ Render (បើគ្មាន វាយក 3000 ធ្វើជាលំនាំដើម)
 const PORT = process.env.PORT || 3000;
-
 server.listen(PORT, () => {
     console.log(`Server កំពុងរត់នៅលើ Port: ${PORT}`);
 });
