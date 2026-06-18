@@ -15,26 +15,38 @@ function mapVoiceAndLang(incomingVoiceID) {
         } else if (v.includes('sreymom') || v.includes('km') || v.includes('kh')) {
             voiceID = 'km-KH-SreymomNeural';
             lang = 'km-KH';
-        } else if (v.includes('en') || v.includes('us')) {
+        } else if (v.includes('en') || v.includes('us') || v.includes('ava')) {
             voiceID = 'en-US-AvaNeural';
             lang = 'en-US';
-        } else {
+        } else if (incomingVoiceID.includes('-')) {
             voiceID = incomingVoiceID;
             const parts = incomingVoiceID.split('-');
-            if (parts.length >= 2) lang = `${parts[0]}-${parts[1]}`;
+            lang = `${parts[0]}-${parts[1]}`;
         }
     }
     return { voiceID, lang };
 }
 
-// មុខងារបំប្លែងល្បឿនសំឡេង
+// មុខងារវៃឆ្លាត៖ បំប្លែងល្បឿនសំឡេងឱ្យត្រូវគ្រប់ស្ថានភាព HTML ចាស់
 function mapSpeed(voiceSpeed) {
     if (!voiceSpeed) return '+0%';
-    const speed = parseInt(voiceSpeed);
+    if (typeof voiceSpeed === 'string' && voiceSpeed.includes('%')) return voiceSpeed;
+    
+    const speed = parseFloat(voiceSpeed);
+    if (isNaN(speed)) return '+0%';
+    
+    // បើ HTML ផ្ញើមកជាកម្រិតគុណ (ឧទាហរណ៍៖ 0.5 ដល់ 2)
+    if (speed >= 0.5 && speed <= 3) {
+        const pct = Math.round((speed - 1) * 100);
+        return pct >= 0 ? `+${pct}%` : `${pct}%`;
+    }
+    
+    // បើ HTML ផ្ញើមកជាលេខរៀងចាស់ (-2, -1, 1, 2)
     if (speed === 1) return '+20%';
     if (speed === 2) return '+40%';
     if (speed === -1) return '-20%';
     if (speed === -2) return '-40%';
+    
     return '+0%';
 }
 
@@ -44,9 +56,10 @@ function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
         const rate = mapSpeed(incomingSpeed);
         const requestId = crypto.randomUUID().replace(/-/g, '');
         
-        // 🔥 ចំណុចកែប្រែសំខាន់បំផុត៖ បន្ថែម options { headers } បន្លំខ្លួនជា Microsoft Edge Browser ការពារ Error 400
+        console.log(`[TTS] កំពុងរៀបចំសំឡេង: Voice=${voiceID}, Rate=${rate}, Text="${text.substring(0, 20)}..."`);
+
         const ws = new WebSocket(
-            `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/trusted/v1/aria/stream?TrustedClientToken=6A5AA1D4EAFF4E9B87E7EFD3C454C3EF&ConnectionId=${requestId}`,
+            `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/trusted/v1/aria/stream?TrustedClientToken=6A5AA1D4EAFF4E9B87E7EFD3C454C3EF&X-ConnectionId=${requestId}`,
             {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
@@ -58,13 +71,20 @@ function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
         );
         
         let audioBuffers = [];
+        let isFinished = false;
+
         let timeout = setTimeout(() => {
-            ws.terminate();
-            reject(new Error("អស់រយៈពេលរង់ចាំពី Microsoft Server (Timeout)"));
-        }, 20000);
+            if (!isFinished) {
+                isFinished = true;
+                ws.terminate();
+                reject(new Error("អស់រយៈពេលរង់ចាំពី Microsoft Server (Timeout)"));
+            }
+        }, 15000);
 
         ws.on('open', () => {
-            const now = new Date().toString();
+            console.log("[MS WebSocket] បានភ្ជាប់ទៅកាន់ Microsoft Server ជោគជ័យ។");
+            const now = Date.now();
+            
             // ផ្ញើការកំណត់ទម្រង់សំឡេង
             const configMsg = `X-Timestamp:${now}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbps-mono-mp3"}}}}`;
             ws.send(configMsg);
@@ -80,35 +100,50 @@ function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
                 try {
                     const headerLength = data.readUInt16BE(0);
                     const audioChunk = data.slice(2 + headerLength);
-                    audioBuffers.push(audioChunk);
+                    if (audioChunk.length > 0) {
+                        audioBuffers.push(audioChunk);
+                    }
                 } catch (e) {
-                    // បង្ការកំហុសតូចតាចពេលអានទិន្នន័យ Binary
+                    console.error("[Error] បញ្ហាអានទិន្នន័យអូឌីយ៉ូ:", e.message);
                 }
             } else {
-                if (data.toString().includes("Path:turn.end")) {
+                const responseText = data.toString();
+                // បើ Microsoft និយាយចប់
+                if (responseText.includes("Path:turn.end")) {
+                    isFinished = true;
                     clearTimeout(timeout);
                     ws.close();
+                    console.log(`[Success] បង្កើតសំឡេងជោគជ័យ! ទទួលបានទំហំទិន្នន័យ: ${audioBuffers.length} Chunks`);
                     resolve(Buffer.concat(audioBuffers));
                 }
             }
         });
 
         ws.on('error', (err) => {
-            clearTimeout(timeout);
-            reject(err);
+            console.error("[MS WebSocket Error] មានបញ្ហាភ្ជាប់:", err.message);
+            if (!isFinished) {
+                isFinished = true;
+                clearTimeout(timeout);
+                reject(err);
+            }
         });
 
-        ws.on('close', () => {
-            clearTimeout(timeout);
+        ws.on('close', (code, reason) => {
+            if (!isFinished) {
+                isFinished = true;
+                clearTimeout(timeout);
+                console.log(`[MS WebSocket Closed] ដាច់ការតភ្ជាប់មុនពេលនិយាយចប់! Code: ${code}, មូលហេតុ: ${reason}`);
+                reject(new Error(`Microsoft បានផ្តាច់ការតភ្ជាប់មុនពេលបង្កើតសំឡេងចប់ (Code: ${code})`));
+            }
         });
     });
 }
 
 const server = http.createServer(async (req, res) => {
-    // បើក CORS ឱ្យទំព័រ HTML របស់អ្នកអាចទាក់ទងមកបានទោះនៅទីណាក៏ដោយ
+    // កំណត់ CORS កម្រិតខ្ពស់ ការពារ Browser ទប់ស្កាត់ (Block) ទិន្នន័យ
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
     if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -121,7 +156,9 @@ const server = http.createServer(async (req, res) => {
         req.on('data', chunk => body += chunk.toString());
         req.on('end', async () => {
             try {
+                console.log("[API] ទទួលបានសំណើថ្មីពី HTML...");
                 const data = JSON.parse(body);
+                
                 if (!data.text) {
                     res.writeHead(400, { 'Content-Type': 'application/json' });
                     return res.end(JSON.stringify({ error: 'សូមបញ្ចូលអត្ថបទ' }));
@@ -129,14 +166,20 @@ const server = http.createServer(async (req, res) => {
 
                 const audioBuffer = await getEdgeAudio(data.text, data.voiceID, data.voiceSpeed);
                 
+                if (audioBuffer.length === 0) {
+                    throw new Error("ទិន្នន័យសំឡេងដែលទទួលបានពី Microsoft គឺទទេស្អាត (Empty Audio)");
+                }
+
                 res.writeHead(200, {
                     'Content-Type': 'audio/mpeg',
-                    'Content-Disposition': 'attachment; filename=speech.mp3'
+                    'Content-Disposition': 'attachment; filename=speech.mp3',
+                    'Content-Length': audioBuffer.length
                 });
                 res.end(audioBuffer);
+                console.log("[API] បានផ្ញើហ្វាយសំឡេង MP3 ទៅកាន់ HTML វិញរួចរាល់!\n");
 
             } catch (error) {
-                console.error(error);
+                console.error("[API Error] មូលហេតុកំហុសគឺ:", error.message);
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: error.message }));
             }
@@ -147,7 +190,7 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 server.listen(PORT, () => {
     console.log(`Server កំពុងរត់នៅលើ Port: ${PORT}`);
 });
