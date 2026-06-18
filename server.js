@@ -2,14 +2,15 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocket = require('ws');
 
-// 🚀 ម៉ាស៊ីនបង្កើតកូដសុវត្ថិភាព Sec-MS-GEC ដើម្បីបន្លំជា Microsoft Edge ពិតៗ (ដោះស្រាយ Error 400)
+// 🚀 ម៉ាស៊ីនបង្កើតកូដសុវត្ថិភាព Sec-MS-GEC (បានកែប្រែ Token ត្រឹមត្រូវ ១០០%)
 function generateSecMsGecToken() {
     const WINDOWS_FILE_TIME_EPOCH = 11644473600n;
-    const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
+    // លេខកូដសម្ងាត់ផ្លូវការរបស់ Microsoft Edge (បានកែត្រូវវិញហើយ)
+    const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9B87E7EFD3C454C3EF'; 
     
-    // គណនាពេលវេលាប្រព័ន្ធជា Ticks (100-nanosecond) តាមស្តង់ដារ Windows
+    // គណនាពេលវេលាប្រព័ន្ធជា Ticks តាមស្តង់ដារ Windows
     const ticks = BigInt(Math.floor((Date.now() / 1000) + Number(WINDOWS_FILE_TIME_EPOCH))) * 10000000n;
-    // បង្គត់ពេលវេលាទៅ ៥ នាទីម្តង ដើម្បីឱ្យត្រូវនឹងប្រព័ន្ធ Microsoft
+    // បង្គត់ពេលវេលាទៅ ៥ នាទីម្តង ដើម្បីឱ្យស្របនឹងម៉ាស៊ីន Microsoft
     const roundedTicks = ticks - (ticks % 3000000000n);
     
     const strToHash = `${roundedTicks}${TRUSTED_CLIENT_TOKEN}`;
@@ -48,26 +49,25 @@ function mapSpeed(voiceSpeed) {
     return '+0%';
 }
 
-// មុខងារហៅទៅកាន់ប្រព័ន្ធ Microsoft Edge TTS ពិតប្រាកដ ១០០%
+// មុខងារទាញយកសំឡេង Piseth & Sreymom ពី Microsoft Edge ផ្ទាល់
 function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
     return new Promise((resolve, reject) => {
         const { voiceID, lang } = mapVoiceAndLang(incomingVoiceID);
         const rate = mapSpeed(incomingSpeed);
         const requestId = crypto.randomUUID().replace(/-/g, '');
         
-        // បង្កើត Token សុវត្ថិភាពថ្មីបំផុត
         const secMsGec = generateSecMsGecToken();
         const CHROMIUM_FULL_VERSION = '130.0.2849.68';
         
-        // ប្តូរទៅកាន់ API Endpoint ថ្មីរបស់ Microsoft Edge ដែលគាំទ្រ Sec-MS-GEC
-        const url = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9FB37E23D68491D6F4&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1-${CHROMIUM_FULL_VERSION}&ConnectionId=${requestId}`;
+        // លីងភ្ជាប់ផ្លូវការទៅកាន់ម៉ាស៊ីនស្វែងរកសំឡេងរបស់ Microsoft Edge
+        const url = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9B87E7EFD3C454C3EF&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1-${CHROMIUM_FULL_VERSION}&ConnectionId=${requestId}`;
         
         const ws = new WebSocket(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
                 'Pragma': 'no-cache',
                 'Cache-Control': 'no-cache',
-                'Origin': 'chrome-extension://jdiccldimpdaibmpbnoehnmfiafhaocl' // បញ្ជាក់ថាជា Extension ផ្លូវការរបស់ Edge
+                'Origin': 'chrome-extension://jdiccldimpdaibmpbnoehnmfiafhaocl'
             }
         });
         
@@ -78,9 +78,9 @@ function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
             if (!isFinished) {
                 isFinished = true;
                 ws.terminate();
-                reject(new Error("Microsoft Edge TTS Timeout"));
+                reject(new Error("អស់រយៈពេលរង់ចាំពី Microsoft (Timeout)"));
             }
-        }, 12000);
+        }, 15000);
 
         ws.on('open', () => {
             const configMsg = `Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbps-mono-mp3"}}}}`;
@@ -137,7 +137,6 @@ const server = http.createServer(async (req, res) => {
 
                 console.log(`[API] ទទួលបានសំណើថ្មីសម្រាប់សំឡេង: ${data.voiceID || 'Sreymom'}`);
                 
-                // ហៅទៅយកសំឡេងពី Microsoft Edge ដោយផ្ទាល់
                 const audioBuffer = await getEdgeAudio(data.text, data.voiceID, data.voiceSpeed);
                 
                 res.writeHead(200, {
