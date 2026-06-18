@@ -2,23 +2,7 @@ const http = require('http');
 const crypto = require('crypto');
 const WebSocket = require('ws');
 
-// 🚀 ម៉ាស៊ីនបង្កើតកូដសុវត្ថិភាព Sec-MS-GEC (បានកែប្រែ Token ត្រឹមត្រូវ ១០០%)
-function generateSecMsGecToken() {
-    const WINDOWS_FILE_TIME_EPOCH = 11644473600n;
-    // លេខកូដសម្ងាត់ផ្លូវការរបស់ Microsoft Edge (បានកែត្រូវវិញហើយ)
-    const TRUSTED_CLIENT_TOKEN = '6A5AA1D4EAFF4E9B87E7EFD3C454C3EF'; 
-    
-    // គណនាពេលវេលាប្រព័ន្ធជា Ticks តាមស្តង់ដារ Windows
-    const ticks = BigInt(Math.floor((Date.now() / 1000) + Number(WINDOWS_FILE_TIME_EPOCH))) * 10000000n;
-    // បង្គត់ពេលវេលាទៅ ៥ នាទីម្តង ដើម្បីឱ្យស្របនឹងម៉ាស៊ីន Microsoft
-    const roundedTicks = ticks - (ticks % 3000000000n);
-    
-    const strToHash = `${roundedTicks}${TRUSTED_CLIENT_TOKEN}`;
-    const hash = crypto.createHash('sha256');
-    hash.update(strToHash, 'ascii');
-    return hash.digest('hex').toUpperCase();
-}
-
+// មុខងារផ្គូផ្គង Voice ID ឱ្យត្រូវនឹងស្តង់ដារ Microsoft 
 function mapVoiceAndLang(incomingVoiceID) {
     let voiceID = 'km-KH-SreymomNeural';
     let lang = 'km-KH';
@@ -39,6 +23,7 @@ function mapVoiceAndLang(incomingVoiceID) {
     return { voiceID, lang };
 }
 
+// មុខងារកំណត់ល្បឿនសំឡេង
 function mapSpeed(voiceSpeed) {
     if (!voiceSpeed) return '+0%';
     const speed = parseInt(voiceSpeed);
@@ -49,53 +34,58 @@ function mapSpeed(voiceSpeed) {
     return '+0%';
 }
 
-// មុខងារទាញយកសំឡេង Piseth & Sreymom ពី Microsoft Edge ផ្ទាល់
+// ម៉ាស៊ីនទាញយកសំឡេងពី Microsoft Edge TTS (Aria Stable Protocol)
 function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
     return new Promise((resolve, reject) => {
         const { voiceID, lang } = mapVoiceAndLang(incomingVoiceID);
         const rate = mapSpeed(incomingSpeed);
         const requestId = crypto.randomUUID().replace(/-/g, '');
         
-        const secMsGec = generateSecMsGecToken();
-        const CHROMIUM_FULL_VERSION = '130.0.2849.68';
-        
-        // លីងភ្ជាប់ផ្លូវការទៅកាន់ម៉ាស៊ីនស្វែងរកសំឡេងរបស់ Microsoft Edge
-        const url = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1?TrustedClientToken=6A5AA1D4EAFF4E9B87E7EFD3C454C3EF&Sec-MS-GEC=${secMsGec}&Sec-MS-GEC-Version=1-${CHROMIUM_FULL_VERSION}&ConnectionId=${requestId}`;
+        // ប្រើប្រាស់ Aria Stable Endpoint ដែលមានស្ថិរភាពខ្ពស់បំផុតសម្រាប់ Cloud Server
+        const url = `wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/trusted/v1/aria/stream?TrustedClientToken=6A5AA1D4EAFF4E9B87E7EFD3C454C3EF&ConnectionId=${requestId}`;
         
         const ws = new WebSocket(url, {
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0',
+                'Origin': 'chrome-extension://jdiccldimpdaibmpbnoehnmfiafhaocl', // ហត្ថលេខា Extension ផ្លូវការដើម្បីការពារ Error 400/403
                 'Pragma': 'no-cache',
-                'Cache-Control': 'no-cache',
-                'Origin': 'chrome-extension://jdiccldimpdaibmpbnoehnmfiafhaocl'
+                'Cache-Control': 'no-cache'
             }
         });
         
         let audioBuffers = [];
         let isFinished = false;
 
+        // ការពារករណីគាំងរង់ចាំយូរ
         let timeout = setTimeout(() => {
             if (!isFinished) {
                 isFinished = true;
                 ws.terminate();
-                reject(new Error("អស់រយៈពេលរង់ចាំពី Microsoft (Timeout)"));
+                reject(new Error("អស់រយៈពេលរង់ចាំឆ្លើយតបពី Microsoft (Timeout)"));
             }
         }, 15000);
 
         ws.on('open', () => {
-            const configMsg = `Content-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbps-mono-mp3"}}}}`;
+            // បច្ចុប្បន្នភាព៖ ត្រូវតែមាន X-Timestamp នៅក្នុងរាល់ Frame ផ្ញើទៅកាន់ Microsoft ដាច់ខាត
+            const timestamp = new Date().toString();
+            
+            // ១. ផ្ញើការកំណត់ទម្រង់ហ្វាយសំឡេង (Audio Output Config)
+            const configMsg = `X-Timestamp:${timestamp}\r\nContent-Type:application/json; charset=utf-8\r\nPath:speech.config\r\n\r\n{"context":{"synthesis":{"audio":{"metadataoptions":{"sentenceBoundaryEnabled":"false","wordBoundaryEnabled":"false"},"outputFormat":"audio-24khz-48kbps-mono-mp3"}}}}`;
             ws.send(configMsg);
 
+            // ២. ផ្ញើអត្ថបទអក្ខរាវិរុទ្ធ SSML ដើម្បីបង្កើតសំឡេង
             const ssml = `<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='${lang}'><voice name='${voiceID}'><prosody rate='${rate}'>${text}</prosody></voice></speak>`;
-            const ssmlMsg = `X-RequestId:${requestId}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`;
+            const ssmlMsg = `X-RequestId:${requestId}\r\nX-Timestamp:${timestamp}\r\nContent-Type:application/ssml+xml\r\nPath:ssml\r\n\r\n${ssml}`;
             ws.send(ssmlMsg);
         });
 
         ws.on('message', (data, isBinary) => {
             if (isBinary) {
+                // ទាញយកទិន្នន័យសំឡេង MP3 ពីកញ្ចប់ Binary របស់ Microsoft
                 const headerLength = data.readUInt16BE(0);
                 audioBuffers.push(data.slice(2 + headerLength));
             } else if (data.toString().includes("Path:turn.end")) {
+                // នៅពេលប្រព័ន្ធបញ្ចប់ការបញ្ជូនសំឡេងទាំងស្រុង
                 isFinished = true;
                 clearTimeout(timeout);
                 ws.close();
@@ -114,6 +104,7 @@ function getEdgeAudio(text, incomingVoiceID, incomingSpeed) {
 
 // បង្កើត Node.js HTTP Server
 const server = http.createServer(async (req, res) => {
+    // កំណត់ CORS ដើម្បីអនុញ្ញាតឱ្យ HTML ហៅមកប្រើប្រាស់បានដោយសេរី
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -137,8 +128,10 @@ const server = http.createServer(async (req, res) => {
 
                 console.log(`[API] ទទួលបានសំណើថ្មីសម្រាប់សំឡេង: ${data.voiceID || 'Sreymom'}`);
                 
+                // ហៅទៅទាញយកសំឡេងពី Microsoft Edge ដោយផ្ទាល់
                 const audioBuffer = await getEdgeAudio(data.text, data.voiceID, data.voiceSpeed);
                 
+                // ផ្ញើហ្វាយសំឡេង MP3 ត្រឡប់ទៅកាន់ HTML វិញ
                 res.writeHead(200, {
                     'Content-Type': 'audio/mpeg',
                     'Content-Length': audioBuffer.length
