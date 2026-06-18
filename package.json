@@ -1,12 +1,16 @@
 {
-  "name": "khmer-ai-tts-api",
+  "name": "transcriber-app",
   "version": "1.0.0",
-  "description": "Stable Khmer AI Text to Speech API via WebSocket",
+  "description": "Audio/Video Transcription Service",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "dev": "nodemon server.js"
   },
   "dependencies": {
-    "ws": "^8.18.0"
+    "axios": "^1.6.8",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1"
   }
 }
